@@ -39,6 +39,9 @@ target 'LxMusicMobile' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
+  # react-native-file-system 的 iOS 原生实现（上游 fork 缺 ios/ 源码，此处本地补齐）
+  pod 'RNFileSystemBridge', :path => './FileSystemBridge'
+
   target 'LxMusicMobileTests' do
     inherit! :complete
     # Pods for testing

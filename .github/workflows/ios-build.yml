@@ -52,6 +52,7 @@ jobs:
             -workspace LxMusicMobile.xcworkspace \
             -scheme LxMusicMobile \
             -configuration Release \
+            -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/LxMusicMobile.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
