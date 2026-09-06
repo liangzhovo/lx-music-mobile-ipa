@@ -1,8 +1,7 @@
 #import "RNModules.h"
-#import <CommonCrypto/CommonCrypto.h>
-#import <CommonCrypto/CommonCryptor.h>
-#import <Security/Security.h>
-#import <Security/SecKey.h>
+@import Security;
+@import Foundation;
+@import CommonCrypto;
 
 @implementation CryptoModule
 
