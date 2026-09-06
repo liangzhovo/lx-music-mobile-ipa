@@ -14,4 +14,6 @@ Pod::Spec.new do |s|
   s.frameworks   = 'Foundation'
   s.libraries    = 'z'
   s.dependency 'React-Core'
+  # 修复系统框架头在模块模式下被 -Werror=non-modular-include 拦断的问题
+  s.xcconfig     = { 'OTHER_CFLAGS' => '-Wno-non-modular-include-in-framework-module' }
 end
