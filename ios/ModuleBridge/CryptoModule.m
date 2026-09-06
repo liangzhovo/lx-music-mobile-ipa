@@ -2,6 +2,7 @@
 #import <CommonCrypto/CommonCrypto.h>
 #import <CommonCrypto/CommonCryptor.h>
 #import <Security/Security.h>
+#import <Security/SecKey.h>
 
 @implementation CryptoModule
 
@@ -28,31 +29,38 @@ static NSString *HexString(const unsigned char *bytes, size_t len) {
   return s;
 }
 
-// ---------- RSA ----------
+// ---------- RSA（使用全版本可用的 SecKeyGeneratePair / SecKeyRawEncrypt / SecKeyRawDecrypt） ----------
 
 static SecKeyRef KeyFromDERData(NSData *der, BOOL isPublic) {
   NSDictionary *attrs = @{
     (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeRSA,
     (__bridge id)kSecAttrKeyClass: isPublic ? (__bridge id)kSecAttrKeyClassPublic : (__bridge id)kSecAttrKeyClassPrivate,
-    (__bridge id)kSecAttrKeySizeInBits: @2048,
   };
-  CFErrorRef error = NULL;
-  SecKeyRef key = SecKeyCreateWithData((__bridge CFDataRef)der, (__bridge CFDictionaryRef)attrs, &error);
-  return key;
+  SecKeyRef key = NULL;
+  SecItemImport((__bridge CFDataRef)der, NULL, NULL, NULL, 0, NULL, (__bridge CFDictionaryRef)attrs, (CFTypeRef *)&key);
+  if (key) {
+    return key;
+  }
+  // 兜底：SecItemImport 失败时尝试 X509/PKCS8 解析
+  return SecKeyCreateWithData((__bridge CFDataRef)der, (__bridge CFDictionaryRef)attrs, NULL);
 }
 
-static NSData *RsaCrypt(NSData *input, SecKeyRef key, BOOL encrypt, BOOL useOAEP) {
-  CFErrorRef error = NULL;
-  SecKeyAlgorithm alg = useOAEP ? kSecKeyAlgorithmRSAEncryptionOAEP : kSecKeyAlgorithmRSAEncryptionRaw;
-  if (!SecKeyIsAlgorithmSupported(key, encrypt ? kSecKeyOperationTypeEncrypt : kSecKeyOperationTypeDecrypt, alg)) {
-    return nil;
-  }
+static NSData *RsaCrypt(NSData *input, SecKeyRef key, BOOL encrypt, BOOL noPadding) {
+  SecPadding padding = noPadding ? kSecPaddingNone : kSecPaddingPKCS1;
   if (encrypt) {
-    CFDataRef out = SecKeyCreateEncryptedData(key, alg, (__bridge CFDataRef)input, &error);
-    return (__bridge_transfer NSData *)out;
+    size_t bufLen = SecKeyGetBlockSize(key);
+    NSMutableData *out = [NSMutableData dataWithLength:bufLen];
+    OSStatus status = SecKeyRawEncrypt(key, padding, input.bytes, input.length, out.mutableBytes, &bufLen);
+    if (status != errSecSuccess) return nil;
+    [out setLength:bufLen];
+    return out;
   } else {
-    CFDataRef out = SecKeyCreateDecryptedData(key, alg, (__bridge CFDataRef)input, &error);
-    return (__bridge_transfer NSData *)out;
+    size_t bufLen = SecKeyGetBlockSize(key);
+    NSMutableData *out = [NSMutableData dataWithLength:bufLen];
+    OSStatus status = SecKeyRawDecrypt(key, padding, input.bytes, input.length, out.mutableBytes, &bufLen);
+    if (status != errSecSuccess) return nil;
+    [out setLength:bufLen];
+    return out;
   }
 }
 
@@ -63,19 +71,19 @@ static NSData *RsaCrypt(NSData *input, SecKeyRef key, BOOL encrypt, BOOL useOAEP
     return nil;
   }
   BOOL isPublic = encrypt;
-  BOOL useOAEP = [padding containsString:@"OAEP"];
+  BOOL noPadding = [padding containsString:@"NoPadding"];
   SecKeyRef secKey = KeyFromDERData(keyBytes, isPublic);
   if (!secKey) {
     if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:2 userInfo:@{NSLocalizedDescriptionKey: @"invalid key DER"}];
     return nil;
   }
   NSData *input = encrypt ? [text dataUsingEncoding:NSUTF8StringEncoding] : Base64Decode(text);
-  if (!input.length && encrypt) {
+  if (!input.length) {
     CFRelease(secKey);
     if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:3 userInfo:@{NSLocalizedDescriptionKey: @"empty input"}];
     return nil;
   }
-  NSData *output = RsaCrypt(input, secKey, encrypt, useOAEP);
+  NSData *output = RsaCrypt(input, secKey, encrypt, noPadding);
   CFRelease(secKey);
   if (!output) {
     if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:4 userInfo:@{NSLocalizedDescriptionKey: @"crypt failed"}];
@@ -95,15 +103,15 @@ RCT_EXPORT_METHOD(generateRsaKey:(RCTPromiseResolveBlock)resolve rejecter:(RCTPr
     (__bridge id)kSecAttrKeySizeInBits: @2048,
     (__bridge id)kSecAttrKeyClass: (__bridge id)kSecAttrKeyClassPrivate,
   };
-  CFErrorRef error = NULL;
-  SecKeyRef privateKey = SecKeyCreateRandomKey((__bridge CFDictionaryRef)attrs, &error);
-  if (!privateKey) {
-    reject(@"rsa_key_error", error ? (__bridge_transfer NSString *)CFErrorCopyDescription(error) : @"generate key failed", nil);
+  SecKeyRef privateKey = NULL;
+  OSStatus status = SecKeyGeneratePair((__bridge CFDictionaryRef)attrs, &privateKey, NULL);
+  if (status != errSecSuccess || !privateKey) {
+    reject(@"rsa_key_error", @"generate key failed", nil);
     return;
   }
   SecKeyRef publicKey = SecKeyCopyPublicKey(privateKey);
-  NSData *pubDer = CFBridgingRelease(SecKeyCopyExternalRepresentation(publicKey, &error)) ?: [NSData data];
-  NSData *privDer = CFBridgingRelease(SecKeyCopyExternalRepresentation(privateKey, &error)) ?: [NSData data];
+  NSData *pubDer = (__bridge_transfer NSData *)SecKeyCopyExternalRepresentation(publicKey, NULL) ?: [NSData data];
+  NSData *privDer = (__bridge_transfer NSData *)SecKeyCopyExternalRepresentation(privateKey, NULL) ?: [NSData data];
   if (publicKey) CFRelease(publicKey);
   CFRelease(privateKey);
   resolve(@{
