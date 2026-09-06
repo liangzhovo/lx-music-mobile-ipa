@@ -42,6 +42,9 @@ target 'LxMusicMobile' do
   # react-native-file-system 的 iOS 原生实现（上游 fork 缺 ios/ 源码，此处本地补齐）
   pod 'RNFileSystemBridge', :path => './FileSystemBridge'
 
+  # lx-music-mobile Android 原生模块的 iOS 实现（Utils/Cache/Crypto/Lyric）
+  pod 'RNModuleBridge', :path => './ModuleBridge'
+
   target 'LxMusicMobileTests' do
     inherit! :complete
     # Pods for testing
