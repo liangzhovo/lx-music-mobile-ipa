@@ -1,0 +1,79 @@
+# 构建 iOS ipa（未签名，供自签安装）
+# 用法：
+#   1. 把本仓库推送到你的 GitHub（私有/公有均可）
+#   2. 仓库 Actions 页面 -> 左侧 "iOS 构建 (ipa)" -> Run workflow（手动触发）
+#   3. 构建完成后到该次运行页底部下载 artifact（LxMusicMobile.ipa）
+#   4. 用 Sideloadly / 爱思助手 / AltStore 以你自己的 Apple ID 重签安装
+#      （免费 Apple ID 自签有效期 7 天；付费开发者账号一年）
+name: iOS 构建 (ipa)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    # macos-14 自带 Xcode 15.x，与 React Native 0.73 兼容性最稳
+    runs-on: macos-14
+    concurrency:
+      group: ios-build
+      cancel-in-progress: true
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node（读 .nvmrc = v18）
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 安装 JS 依赖
+        run: npm ci
+
+      - name: 设置 Ruby（CocoaPods）
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: 安装 CocoaPods 依赖
+        working-directory: ios
+        run: |
+          bundle install
+          bundle exec pod install --repo-update
+
+      # React Native 的 Xcode 构建脚本会自动 bundle JS（生成 main.jsbundle），
+      # 无需手动执行 react-native bundle。
+
+      - name: xcodebuild 归档（Release，不签名）
+        working-directory: ios
+        run: |
+          xcodebuild archive \
+            -workspace LxMusicMobile.xcworkspace \
+            -scheme LxMusicMobile \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/LxMusicMobile.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS=""
+
+      - name: 组装 ipa（Payload 结构）
+        run: |
+          APP_PATH="$RUNNER_TEMP/LxMusicMobile.xcarchive/Products/Applications/LxMusicMobile.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::未找到 LxMusicMobile.app，归档可能失败"
+            find "$RUNNER_TEMP/LxMusicMobile.xcarchive" -maxdepth 4 -name "*.app" 2>/dev/null || true
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r LxMusicMobile.ipa Payload
+
+      - name: 上传 ipa 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: LxMusicMobile-ipa
+          path: LxMusicMobile.ipa
+          if-no-files-found: error
+          retention-days: 14
