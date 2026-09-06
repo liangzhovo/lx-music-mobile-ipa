@@ -137,8 +137,12 @@ RCT_EXPORT_METHOD(getSystemLocales:(RCTPromiseResolveBlock)resolve rejecter:(RCT
 RCT_EXPORT_METHOD(getWindowSize:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
-    CGRect bounds = RCTKeyWindow().bounds;
-    resolve(@{ @"width": @(bounds.size.width), @"height": @(bounds.size.height) });
+    UIView *keyWindow = RCTKeyWindow();
+    CGRect bounds = keyWindow ? keyWindow.bounds : [UIScreen mainScreen].bounds;
+    CGFloat scale = [UIScreen mainScreen].scale;
+    // JS 端会除以 PixelRatio（size.width / scale），因此原生必须返回物理像素，
+    // 否则返回逻辑点会被 JS 再除一次 → 视口变成实际尺寸的 1/3 → 布局与字体错乱
+    resolve(@{ @"width": @(bounds.size.width * scale), @"height": @(bounds.size.height * scale) });
   });
 }
 
