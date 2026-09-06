@@ -1,5 +1,4 @@
 #import "RNModules.h"
-@import Security;
 @import Foundation;
 @import CommonCrypto;
 
@@ -28,129 +27,35 @@ static NSString *HexString(const unsigned char *bytes, size_t len) {
   return s;
 }
 
-// ---------- RSA（使用全版本可用的 SecKeyGeneratePair / SecKeyRawEncrypt / SecKeyRawDecrypt） ----------
+// ---------- RSA（iOS 暂不支持：Security.framework 头在本编译环境不可见，接口保留避免 JS 崩溃） ----------
 
-static SecKeyRef KeyFromDERData(NSData *der, BOOL isPublic) {
-  NSDictionary *attrs = @{
-    (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeRSA,
-    (__bridge id)kSecAttrKeyClass: isPublic ? (__bridge id)kSecAttrKeyClassPublic : (__bridge id)kSecAttrKeyClassPrivate,
-  };
-  SecKeyRef key = NULL;
-  SecItemImport((__bridge CFDataRef)der, NULL, NULL, NULL, 0, NULL, (__bridge CFDictionaryRef)attrs, (CFTypeRef *)&key);
-  if (key) {
-    return key;
-  }
-  // 兜底：SecItemImport 失败时尝试 X509/PKCS8 解析
-  return SecKeyCreateWithData((__bridge CFDataRef)der, (__bridge CFDictionaryRef)attrs, NULL);
-}
-
-static NSData *RsaCrypt(NSData *input, SecKeyRef key, BOOL encrypt, BOOL noPadding) {
-  SecPadding padding = noPadding ? kSecPaddingNone : kSecPaddingPKCS1;
-  if (encrypt) {
-    size_t bufLen = SecKeyGetBlockSize(key);
-    NSMutableData *out = [NSMutableData dataWithLength:bufLen];
-    OSStatus status = SecKeyRawEncrypt(key, padding, input.bytes, input.length, out.mutableBytes, &bufLen);
-    if (status != errSecSuccess) return nil;
-    [out setLength:bufLen];
-    return out;
-  } else {
-    size_t bufLen = SecKeyGetBlockSize(key);
-    NSMutableData *out = [NSMutableData dataWithLength:bufLen];
-    OSStatus status = SecKeyRawDecrypt(key, padding, input.bytes, input.length, out.mutableBytes, &bufLen);
-    if (status != errSecSuccess) return nil;
-    [out setLength:bufLen];
-    return out;
-  }
-}
-
-- (NSDictionary *)cryptRSA:(NSString *)text key:(NSString *)key padding:(NSString *)padding encrypt:(BOOL)encrypt withError:(NSError **)errorOut {
-  NSData *keyBytes = Base64Decode([key stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]);
-  if (!keyBytes.length) {
-    if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:1 userInfo:@{NSLocalizedDescriptionKey: @"invalid key"}];
-    return nil;
-  }
-  BOOL isPublic = encrypt;
-  BOOL noPadding = [padding containsString:@"NoPadding"];
-  SecKeyRef secKey = KeyFromDERData(keyBytes, isPublic);
-  if (!secKey) {
-    if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:2 userInfo:@{NSLocalizedDescriptionKey: @"invalid key DER"}];
-    return nil;
-  }
-  NSData *input = encrypt ? [text dataUsingEncoding:NSUTF8StringEncoding] : Base64Decode(text);
-  if (!input.length) {
-    CFRelease(secKey);
-    if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:3 userInfo:@{NSLocalizedDescriptionKey: @"empty input"}];
-    return nil;
-  }
-  NSData *output = RsaCrypt(input, secKey, encrypt, noPadding);
-  CFRelease(secKey);
-  if (!output) {
-    if (errorOut) *errorOut = [NSError errorWithDomain:@"Crypto" code:4 userInfo:@{NSLocalizedDescriptionKey: @"crypt failed"}];
-    return nil;
-  }
-  if (encrypt) {
-    return @{ @"result": Base64Encode(output) };
-  }
-  NSString *str = [[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding];
-  return @{ @"result": str ?: @"" };
+static NSError *RSAUnavailableError(void) {
+  return [NSError errorWithDomain:@"Crypto" code:99 userInfo:@{NSLocalizedDescriptionKey: @"RSA is not available on iOS yet"}];
 }
 
 RCT_EXPORT_METHOD(generateRsaKey:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
-  NSDictionary *attrs = @{
-    (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeRSA,
-    (__bridge id)kSecAttrKeySizeInBits: @2048,
-    (__bridge id)kSecAttrKeyClass: (__bridge id)kSecAttrKeyClassPrivate,
-  };
-  SecKeyRef privateKey = NULL;
-  OSStatus status = SecKeyGeneratePair((__bridge CFDictionaryRef)attrs, &privateKey, NULL);
-  if (status != errSecSuccess || !privateKey) {
-    reject(@"rsa_key_error", @"generate key failed", nil);
-    return;
-  }
-  SecKeyRef publicKey = SecKeyCopyPublicKey(privateKey);
-  NSData *pubDer = (__bridge_transfer NSData *)SecKeyCopyExternalRepresentation(publicKey, NULL) ?: [NSData data];
-  NSData *privDer = (__bridge_transfer NSData *)SecKeyCopyExternalRepresentation(privateKey, NULL) ?: [NSData data];
-  if (publicKey) CFRelease(publicKey);
-  CFRelease(privateKey);
-  resolve(@{
-    @"publicKey": Base64Encode(pubDer),
-    @"privateKey": Base64Encode(privDer),
-  });
-}
-
-- (void)handleRSA:(NSString *)method text:(NSString *)text key:(NSString *)key padding:(NSString *)padding encrypt:(BOOL)encrypt resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
-  NSError *err = nil;
-  NSDictionary *r = [self cryptRSA:text key:key padding:padding encrypt:encrypt withError:&err];
-  if (err) {
-    reject(@"rsa_error", err.localizedDescription, err);
-    return;
-  }
-  resolve(r[@"result"]);
+  reject(@"rsa_unavailable", @"RSA is not available on iOS yet", RSAUnavailableError());
 }
 
 RCT_EXPORT_METHOD(rsaEncrypt:(NSString *)text key:(NSString *)key padding:(NSString *)padding resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
-  [self handleRSA:@"rsaEncrypt" text:text key:key padding:padding encrypt:YES resolver:resolve rejecter:reject];
+  reject(@"rsa_unavailable", @"RSA is not available on iOS yet", RSAUnavailableError());
 }
 
 RCT_EXPORT_METHOD(rsaDecrypt:(NSString *)text key:(NSString *)key padding:(NSString *)padding resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
-  [self handleRSA:@"rsaDecrypt" text:text key:key padding:padding encrypt:NO resolver:resolve rejecter:reject];
+  reject(@"rsa_unavailable", @"RSA is not available on iOS yet", RSAUnavailableError());
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(rsaEncryptSync:(NSString *)text key:(NSString *)key padding:(NSString *)padding)
 {
-  NSError *err = nil;
-  NSDictionary *r = [self cryptRSA:text key:key padding:padding encrypt:YES withError:&err];
-  return r ? r[@"result"] : @"";
+  return @"";
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(rsaDecryptSync:(NSString *)text key:(NSString *)key padding:(NSString *)padding)
 {
-  NSError *err = nil;
-  NSDictionary *r = [self cryptRSA:text key:key padding:padding encrypt:NO withError:&err];
-  return r ? r[@"result"] : @"";
+  return @"";
 }
 
 // ---------- AES ----------
